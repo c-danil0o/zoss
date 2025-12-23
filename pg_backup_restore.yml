@@ -1,0 +1,37 @@
+- name: PostgreSQL backup and restore on Metasploitable3
+  hosts: metasploitable3
+  become: yes
+  vars:
+    pg_user: postgres
+    pg_db: testdb   
+    backup_dir: /opt/pg_backups
+    backup_file: "{{ backup_dir }}/{{ pg_db }}_{{ ansible_date_time.epoch }}.sql"
+
+  tasks:
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: "{{ pg_user }}"
+        mode: "0700"
+
+    - name: Backup PostgreSQL database
+      become_user: "{{ pg_user }}"
+      command: >
+        pg_dump {{ pg_db }} -F p -f {{ backup_file }}
+
+    - name: Drop database before restore (test scenarij)
+      become_user: "{{ pg_user }}"
+      command: psql -c "DROP DATABASE IF EXISTS {{ pg_db }};"
+      when: restore | default(false)
+
+    - name: Recreate database
+      become_user: "{{ pg_user }}"
+      command: psql -c "CREATE DATABASE {{ pg_db }};"
+      when: restore | default(false)
+
+    - name: Restore PostgreSQL database from backup
+      become_user: "{{ pg_user }}"
+      command: >
+        psql {{ pg_db }} -f {{ backup_file_to_restore }}
+      when: restore | default(false)

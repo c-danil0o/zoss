@@ -1,0 +1,219 @@
+---
+- name: Incident Response - Shellshock Forensic Artifact Collection
+  hosts: metasploitable3          # ili grupa/host iz tvog inventory-ja
+  become: yes
+  gather_facts: yes
+
+  vars:
+    collection_dir: "/opt/forensic/collection/{{ ansible_hostname }}_{{ ansible_date_time.epoch }}"
+    preserve_evidence: yes
+
+  tasks:
+    # TASK 1: Kreiranje sigurnog direktorijuma za evidenciju
+    - name: Create forensic collection directory with secure permissions
+      file:
+        path: "{{ collection_dir }}"
+        state: directory
+        mode: "0700"
+
+    # TASK 2: Shellshock-specifični artefakti (Apache, CGI, Bash)
+    - name: Collect Apache and web server logs (Shellshock-focused)
+      archive:
+        path:
+          - /var/log/apache2
+          - /var/log/httpd
+        dest: "{{ collection_dir }}/apache_logs.tar.gz"
+        exclude_path:
+          - "*.gz"
+          - "*.zip"
+      ignore_errors: yes
+
+    - name: Collect CGI scripts and web-exposed shell scripts
+      command: >
+        find /usr/lib/cgi-bin /var/www /var/www/html
+        -maxdepth 5 -type f \( -name "*.cgi" -o -name "*.sh" -o -name "*.pl" \)
+      register: cgi_files
+      ignore_errors: yes
+
+    - name: Save CGI file list
+      copy:
+        content: "{{ cgi_files.stdout }}"
+        dest: "{{ collection_dir }}/cgi_files.txt"
+        mode: "0600"
+
+    - name: Collect CGI directories listing with permissions
+      command: "ls -lR /usr/lib/cgi-bin /var/www /var/www/html"
+      register: cgi_ls
+      ignore_errors: yes
+
+    - name: Save CGI directories listing
+      copy:
+        content: "{{ cgi_ls.stdout }}"
+        dest: "{{ collection_dir }}/cgi_dirs_listing.txt"
+        mode: "0600"
+
+    - name: Record Bash version (Shellshock relevance)
+      command: "bash --version"
+      register: bash_version
+      ignore_errors: yes
+
+    - name: Save Bash version info
+      copy:
+        content: "{{ bash_version.stdout }}"
+        dest: "{{ collection_dir }}/bash_version.txt"
+        mode: "0600"
+
+    # TASK 3: Volatilni sistemski state (procesi, mreža, moduli)
+    - name: Collect volatile system state information
+      block:
+        - name: Get comprehensive process listing with extended format
+          command: ps auxeww
+          register: running_processes
+
+        - name: Save process list to evidence directory
+          copy:
+            content: "{{ running_processes.stdout }}"
+            dest: "{{ collection_dir }}/process_list.txt"
+            mode: "0600"
+
+        - name: Get all network connections and listening ports
+          command: netstat -tunap
+          register: network_connections
+
+        - name: Save network connections to evidence file
+          copy:
+            content: "{{ network_connections.stdout }}"
+            dest: "{{ collection_dir }}/network_connections.txt"
+            mode: "0600"
+
+        - name: Collect loaded kernel modules
+          command: lsmod
+          register: kernel_modules
+
+        - name: Save kernel modules list
+          copy:
+            content: "{{ kernel_modules.stdout }}"
+            dest: "{{ collection_dir }}/kernel_modules.txt"
+            mode: "0600"
+
+      rescue:
+        - name: Log system information collection failure
+          debug:
+            msg: "System information collection failed for {{ inventory_hostname }}"
+
+    # TASK 4: File system artefakti (recent changes)
+    - name: Collect file system artifacts and metadata
+      when: preserve_evidence
+      block:
+        - name: Find recently modified files in critical directories
+          find:
+            paths:
+              - /bin
+              - /sbin
+              - /usr/bin
+              - /usr/sbin
+              - /tmp
+              - /var/tmp
+              - /usr/lib/cgi-bin
+              - /var/www
+              - /var/www/html
+            file_type: file
+            age: "30d"
+          register: recent_files
+
+        - name: Save recent file listing with metadata
+          copy:
+            content: "{{ recent_files.files | to_nice_yaml }}"
+            dest: "{{ collection_dir }}/recent_files.yaml"
+            mode: "0600"
+
+        - name: Collect cryptographic hashes of recently modified files
+          stat:
+            path: "{{ item.path }}"
+            checksum_algorithm: sha256
+            get_checksum: yes
+          loop: "{{ recent_files.files }}"
+          register: file_hashes
+
+
+        - name: Save file hashes and metadata
+          copy:
+            content: "{{ file_hashes.results | to_nice_yaml }}"
+            dest: "{{ collection_dir }}/file_hashes.yaml"
+            mode: "0600"
+
+    # TASK 5: User i auth podaci
+    - name: Collect user account and authentication artifacts
+      block:
+        - name: Get currently logged in users
+          command: who
+          register: logged_in_users
+
+        - name: Save current user session information
+          copy:
+            content: "{{ logged_in_users.stdout }}"
+            dest: "{{ collection_dir }}/logged_in_users.txt"
+            mode: "0600"
+
+        - name: Get comprehensive login history
+          command: last -a
+          register: last_logins
+
+        - name: Save login history for analysis
+          copy:
+            content: "{{ last_logins.stdout }}"
+            dest: "{{ collection_dir }}/last_logins.txt"
+            mode: "0600"
+
+        - name: Collect sudoers configuration
+          command: cat /etc/sudoers
+          register: sudoers_config
+
+        - name: Save sudoers configuration
+          copy:
+            content: "{{ sudoers_config.stdout }}"
+            dest: "{{ collection_dir }}/sudoers_config.txt"
+            mode: "0600"
+
+      rescue:
+        - name: Log user information collection failure
+          debug:
+            msg: "User information collection failed on {{ inventory_hostname }}"
+
+    # TASK 6: Generalni logovi
+    - name: Collect and compress /var/log for offline analysis
+      archive:
+        path: /var/log
+        dest: "{{ collection_dir }}/logs.tar.gz"
+        exclude_path:
+          - "*.gz"
+          - "*.zip"
+
+    # TASK 7: Manifest i chain of custody
+    - name: Create forensic collection manifest
+      copy:
+        content: |
+          Forensic Collection Report - Shellshock Incident
+          ===============================================
+          Hostname: {{ ansible_hostname }}
+          Collection Time: {{ ansible_date_time.iso8601 }}
+          Collector: {{ ansible_user_id }}
+          Playbook: {{ ansible_play_name }}
+
+          Incident: Shellshock (CVE-2014-6271) - Apache/mod_cgi/Bash
+
+          Evidence Collected:
+            - Apache and web server logs
+            - CGI scripts and permissions
+            - Bash version information
+            - System process information
+            - Network connection data
+            - Kernel module list
+            - Recent file metadata
+            - File cryptographic hashes
+            - User session information
+            - Authentication history
+            - Sudoers configuration
+            - System log files (/var/log)
+        dest: "{{ collection_dir }}/MANIFEST.txt"
+        mode: "0600"

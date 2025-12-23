@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  nessus:
+    image: tenable/nessus:latest-ubuntu
+    container_name: nessus
+    ports:
+      - "8834:8834"
+    environment:
+      - USERNAME=admin
+      - PASSWORD=admin
+    restart: unless-stopped
+
+  metasploitable3:
+    image: kirscht/metasploitable3-ub1404
+    container_name: metasploitable3
+    entrypoint: /entrypoint.sh
+    environment:
+      PASS: msfadmin
+      SMB: yes
+      SSH: yes
+      HTTP: yes
+      SQL: yes
+      FTP: yes
+    ports:
+      - "21:21"
+      - "2222:22"
+      - "80:80"
+      - "4445:445"
+      - "3306:3306"
+    restart: unless-stopped
